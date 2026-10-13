@@ -1,0 +1,32 @@
+# Flutter and Dart build output
+.dart_tool/
+.packages
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+
+# Local machine configuration
+android/local.properties
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
+
+# Android Gradle and IDE output
+android/.gradle/
+android/.cxx/
+android/**/build/
+*.iml
+
+# iOS generated and local files
+ios/Flutter/ephemeral/
+ios/Pods/
+ios/Runner.xcworkspace/xcuserdata/
+ios/Runner.xcodeproj/xcuserdata/
+ios/DerivedData/
+
+# Generated iOS plugin registrant
+ios/Runner/GeneratedPluginRegistrant.*
+
+# Local release artifacts
+*.apk
+*.aab
+*.ipa
