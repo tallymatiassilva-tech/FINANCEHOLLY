@@ -1,3 +1,5 @@
+import java.io.File
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
@@ -23,7 +25,7 @@ gradle.taskGraph.whenReady {
             )
         }
         val keystorePath = releaseSigningValues.getValue("ANDROID_KEYSTORE_PATH")!!
-        if (!java.io.File(keystorePath).isFile) {
+        if (!File(keystorePath).isFile) {
             throw GradleException("Keystore not found at ANDROID_KEYSTORE_PATH.")
         }
     }
