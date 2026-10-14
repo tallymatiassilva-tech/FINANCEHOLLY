@@ -10,7 +10,7 @@ Instale Flutter (canal stable), Android Studio com Android SDK e Java 17. Na pas
 .\build_android.ps1
 ```
 
-O script gera as pastas nativas Android/iOS, baixa as dependências, executa a análise estática e compila o APK. O APK universal fica em `build\app\outputs\flutter-apk\app-release.apk`. Para instalar diretamente em um Android, transfira esse arquivo para o aparelho e abra-o; permita a instalação desse arquivo para o aplicativo que o abriu. Também é possível instalar por USB com `flutter install`.
+O script gera as pastas nativas Android/iOS, baixa as dependências, executa a análise estática e compila o APK. O APK universal fica em `build\app\outputs\flutter-apk\app-release.apk`. O release exige um keystore próprio e as variáveis de ambiente `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` e `ANDROID_KEY_PASSWORD`; a compilação falha se estiverem ausentes. Não use nem publique a chave de debug como chave de distribuição, e mantenha o keystore e suas senhas fora do repositório. Guarde o keystore: atualizações Android precisam ser assinadas com a mesma chave. Para instalar diretamente, transfira o APK ao aparelho e abra-o; permita a instalação desse arquivo para o aplicativo que o abriu.
 
 ## Primeiro acesso
 
@@ -18,7 +18,7 @@ Na primeira execução, use **Cadastrar usuário** para criar o administrador. I
 
 ## Recursos incluídos
 
-- Login local com senha e chave de recuperação armazenadas como hashes.
+- Login local com senha e chave de recuperação armazenadas com PBKDF2-HMAC-SHA256; hashes de senhas legadas são atualizados no próximo login bem-sucedido e hashes de chaves legadas, na próxima recuperação de senha.
 - Dashboard, entradas, despesas, fluxo de caixa, cantina/vendas e compras, estoque, relatórios e configurações.
 - SQLite local com transações, categorias, fornecedores, usuários, produtos e movimentações.
 - Baixa automática do estoque em vendas da cantina e alertas de estoque baixo/zerado.
@@ -26,7 +26,7 @@ Na primeira execução, use **Cadastrar usuário** para criar o administrador. I
 - Tema claro/escuro e dados da igreja.
 
 As fórmulas `.xlsx` são gravadas no formato interno padronizado do Excel (nomes de funções em inglês); o Excel em português as exibe/localiza como `SOMA`, `SOMASE`, `SE` e `CONT.VALORES`.
-O login é local e não substitui a proteção do aparelho: o SQLite não é criptografado. Proteja o celular e os backups com os recursos do sistema operacional.
+O banco local é criptografado com SQLCipher; a chave aleatória fica no armazenamento seguro do aparelho e o login do app continua obrigatório para acessar os dados. Na primeira abertura após a atualização, o banco SQLite existente é convertido e validado antes da substituição. Se a chave protegida for perdida, o banco criptografado não poderá ser recuperado. O backup automático do Android está desativado. Os backups exportados pelo app são arquivos SQLite sem criptografia para permitir restauração em outro aparelho; trate-os como informação financeira confidencial.
 
 ## iPhone/iPad
 

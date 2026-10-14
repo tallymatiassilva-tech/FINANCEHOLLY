@@ -1,8 +1,26 @@
+import 'dart:io';
+import 'dart:math';
+
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart' as p;
-import 'package:sqflite/sqflite.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:sqflite_sqlcipher/sqflite.dart';
 
 class AppDatabase {
+  static const _keyStorageName = 'controle_financeiro_sqlcipher_key_v1';
+  static const _sumColumns = <String, Set<String>>{
+    'entradas': {'valor'},
+    'despesas': {'valor'},
+    'vendas_cantina': {'valor_total'},
+    'compras_cantina': {'valor_compra'},
+  };
+  static const _sumFilters = <String, Set<String>>{
+    'despesas': {'status'},
+  };
+
+  final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
   Database? _database;
+  String? _encryptionKey;
 
   Database get database {
     final db = _database;
@@ -15,8 +33,27 @@ class AppDatabase {
   Future<void> open() async {
     if (_database != null) return;
     final databasePath = await getDatabasesPath();
+    final filePath = p.join(databasePath, 'controle_financeiro_igreja.db');
+    await _restoreInterruptedMigration(filePath);
+    final databaseFile = File(filePath);
+    final databaseExists = await databaseFile.exists();
+    final isPlaintext = databaseExists && await _isPlaintextDatabase(filePath);
+    var key = await _secureStorage.read(key: _keyStorageName);
+    if (key == null) {
+      if (databaseExists && !isPlaintext) {
+        throw StateError(
+          'A chave segura do banco não está disponível. '
+          'O banco criptografado não foi alterado.',
+        );
+      }
+      key = _newEncryptionKey();
+      await _secureStorage.write(key: _keyStorageName, value: key);
+    }
+    _encryptionKey = key;
+    if (isPlaintext) await _encryptPlaintextDatabase(filePath, key);
     _database = await openDatabase(
-      p.join(databasePath, 'controle_financeiro_igreja.db'),
+      filePath,
+      password: key,
       version: 1,
       onConfigure: (db) async => db.execute('PRAGMA foreign_keys = ON'),
       onCreate: (db, version) async {
@@ -165,6 +202,196 @@ class AppDatabase {
         }
       },
     );
+    final oldDatabase = File('$filePath.legacy');
+    if (await oldDatabase.exists() && !await _isPlaintextDatabase(filePath)) {
+      await oldDatabase.delete();
+    }
+  }
+
+  String _newEncryptionKey() {
+    final random = Random.secure();
+    return List<int>.generate(32, (_) => random.nextInt(256))
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join();
+  }
+
+  Future<bool> _isPlaintextDatabase(String filePath) async {
+    final file = File(filePath);
+    if (!await file.exists()) return false;
+    final handle = await file.open();
+    try {
+      final signature = await handle.read(16);
+      return String.fromCharCodes(signature) == 'SQLite format 3\u0000';
+    } finally {
+      await handle.close();
+    }
+  }
+
+  Future<void> _restoreInterruptedMigration(String filePath) async {
+    final databaseFile = File(filePath);
+    final legacyFile = File('$filePath.legacy');
+    if (!await databaseFile.exists() && await legacyFile.exists()) {
+      await legacyFile.rename(filePath);
+    }
+  }
+
+  Future<void> _encryptPlaintextDatabase(String filePath, String key) async {
+    final stagingFile = File('$filePath.encrypted');
+    final legacyFile = File('$filePath.legacy');
+    if (await legacyFile.exists()) {
+      throw StateError(
+        'A migração anterior do banco não foi concluída; '
+        'o arquivo legado foi preservado.',
+      );
+    }
+    if (await stagingFile.exists()) await stagingFile.delete();
+
+    final source = await openDatabase(filePath);
+    var attached = false;
+    try {
+      await source.rawQuery('PRAGMA wal_checkpoint(FULL)');
+      await source.execute(
+        'ATTACH DATABASE ? AS encrypted KEY ?',
+        [stagingFile.path, key],
+      );
+      attached = true;
+      await source.rawQuery("SELECT sqlcipher_export('encrypted')");
+      await source.execute('DETACH DATABASE encrypted');
+      attached = false;
+    } finally {
+      try {
+        if (attached) await source.execute('DETACH DATABASE encrypted');
+      } finally {
+        await source.close();
+      }
+    }
+
+    final verification = await openDatabase(
+      stagingFile.path,
+      password: key,
+      readOnly: true,
+    );
+    try {
+      final tables = await verification.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type = 'table'",
+      );
+      if (!tables.any((row) => row['name'] == 'usuarios')) {
+        throw StateError('A cópia criptografada do banco não passou na validação.');
+      }
+    } finally {
+      await verification.close();
+    }
+
+    await File(filePath).rename(legacyFile.path);
+    try {
+      await stagingFile.rename(filePath);
+    } catch (error, stackTrace) {
+      if (!await File(filePath).exists() && await legacyFile.exists()) {
+        await legacyFile.rename(filePath);
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+  }
+
+  Future<Database> openDatabaseForBackupValidation(String filePath) async {
+    final isPlaintext = await _isPlaintextDatabase(filePath);
+    final key = _encryptionKey;
+    if (!isPlaintext && key == null) {
+      throw StateError('A chave do banco não está disponível para validar o backup.');
+    }
+    return openDatabase(
+      filePath,
+      password: isPlaintext ? null : key,
+      readOnly: true,
+    );
+  }
+
+  Future<String> prepareBackupForRestore(String sourcePath) async {
+    final key = _encryptionKey;
+    if (key == null) {
+      throw StateError('O banco precisa estar aberto para restaurar um backup.');
+    }
+    final directory = await getTemporaryDirectory();
+    final stagingPath = p.join(
+      directory.path,
+      'restore_${DateTime.now().microsecondsSinceEpoch}.db',
+    );
+    await File(sourcePath).copy(stagingPath);
+    try {
+      if (await _isPlaintextDatabase(stagingPath)) {
+        await _encryptPlaintextDatabase(stagingPath, key);
+        final legacyFile = File('$stagingPath.legacy');
+        if (await legacyFile.exists()) await legacyFile.delete();
+      }
+      final validation = await openDatabase(
+        stagingPath,
+        password: key,
+        readOnly: true,
+      );
+      try {
+        final tables = await validation.rawQuery(
+          "SELECT name FROM sqlite_master WHERE type = 'table'",
+        );
+        if (!tables.any((row) => row['name'] == 'usuarios')) {
+          throw FormatException(
+            'O arquivo não contém um banco criptografado válido para este aparelho.',
+          );
+        }
+      } finally {
+        await validation.close();
+      }
+      return stagingPath;
+    } catch (error, stackTrace) {
+      final stagedFile = File(stagingPath);
+      if (await stagedFile.exists()) await stagedFile.delete();
+      final legacyFile = File('$stagingPath.legacy');
+      if (await legacyFile.exists()) await legacyFile.delete();
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+  }
+
+  Future<void> exportUnencryptedBackup(String outputPath) async {
+    final key = _encryptionKey;
+    if (key == null) {
+      throw StateError('O banco precisa estar aberto para exportar um backup.');
+    }
+    final output = File(outputPath);
+    if (await output.exists()) await output.delete();
+    try {
+      final source = database;
+      var attached = false;
+      try {
+        await source.execute(
+          'ATTACH DATABASE ? AS backup KEY ?',
+          [outputPath, ''],
+        );
+        attached = true;
+        await source.rawQuery("SELECT sqlcipher_export('backup')");
+        await source.execute('DETACH DATABASE backup');
+        attached = false;
+      } finally {
+        try {
+          if (attached) await source.execute('DETACH DATABASE backup');
+        } finally {
+          await source.close();
+        }
+      }
+
+      final verification = await openDatabase(outputPath, readOnly: true);
+      try {
+        final tables = await verification.rawQuery(
+          "SELECT name FROM sqlite_master WHERE type = 'table'",
+        );
+        if (!tables.any((row) => row['name'] == 'usuarios')) {
+          throw StateError('O arquivo de backup não passou na validação.');
+        }
+      } finally {
+        await verification.close();
+      }
+    } catch (error, stackTrace) {
+      if (await output.exists()) await output.delete();
+      Error.throwWithStackTrace(error, stackTrace);
+    }
   }
 
   Future<List<Map<String, Object?>>> query(
@@ -195,9 +422,30 @@ class AppDatabase {
   Future<int> delete(String table, int id) =>
       database.delete(table, where: 'id = ?', whereArgs: [id]);
 
-  Future<double> sum(String table, String column, {String? where}) async {
+  Future<double> sum(
+    String table,
+    String column, {
+    String? whereColumn,
+    Object? whereValue,
+  }) async {
+    if (_sumColumns[table]?.contains(column) != true) {
+      throw ArgumentError.value(column, 'column', 'Coluna fora do escopo de soma.');
+    }
+    if (whereColumn != null &&
+        !(_sumFilters[table]?.contains(whereColumn) ?? false)) {
+      throw ArgumentError.value(
+        whereColumn,
+        'whereColumn',
+        'Coluna fora do escopo de filtro.',
+      );
+    }
+    if ((whereColumn == null) != (whereValue == null)) {
+      throw ArgumentError('Informe a coluna e o valor do filtro juntos.');
+    }
+    final where = whereColumn == null ? '' : ' WHERE $whereColumn = ?';
     final result = await database.rawQuery(
-      'SELECT COALESCE(SUM($column), 0) AS total FROM $table${where == null ? '' : ' WHERE $where'}',
+      'SELECT COALESCE(SUM($column), 0) AS total FROM $table$where',
+      whereColumn == null ? null : [whereValue],
     );
     return (result.first['total'] as num).toDouble();
   }

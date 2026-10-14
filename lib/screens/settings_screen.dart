@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
-import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_sqlcipher/sqflite.dart';
 
 import '../services/app_state.dart';
 
@@ -156,21 +156,49 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _chooseLogo() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      withData: true,
-    );
-    if (result == null) return;
-    final file = result.files.single;
-    if (file.bytes == null) {
-      _message('Não foi possível ler o arquivo de imagem.');
-      return;
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        withData: true,
+      );
+      if (result == null) return;
+      final file = result.files.single;
+      final bytes = file.bytes;
+      if (bytes == null) {
+        _message('Não foi possível ler o arquivo de imagem.');
+        return;
+      }
+      if (bytes.length > 5 * 1024 * 1024) {
+        _message('A imagem deve ter no máximo 5 MB.');
+        return;
+      }
+      final extension = p.extension(file.name).toLowerCase();
+      final validImage = switch (extension) {
+        '.jpg' || '.jpeg' =>
+          bytes.length >= 3 &&
+              bytes[0] == 0xff &&
+              bytes[1] == 0xd8 &&
+              bytes[2] == 0xff,
+        '.png' =>
+          bytes.length >= 8 &&
+              bytes.take(8).join(',') == '137,80,78,71,13,10,26,10',
+        '.webp' =>
+          bytes.length >= 12 &&
+              String.fromCharCodes(bytes.sublist(0, 4)) == 'RIFF' &&
+              String.fromCharCodes(bytes.sublist(8, 12)) == 'WEBP',
+        _ => false,
+      };
+      if (!validImage) {
+        _message('Selecione uma imagem PNG, JPG ou WebP válida.');
+        return;
+      }
+      final directory = await getApplicationDocumentsDirectory();
+      final localFile = File(p.join(directory.path, 'logo_igreja$extension'));
+      await localFile.writeAsBytes(bytes, flush: true);
+      if (mounted) setState(() => _logoPath = localFile.path);
+    } catch (error) {
+      if (mounted) _message('Não foi possível salvar a logo: $error');
     }
-    final directory = await getApplicationDocumentsDirectory();
-    final extension = p.extension(file.name).toLowerCase();
-    final localFile = File(p.join(directory.path, 'logo_igreja$extension'));
-    await localFile.writeAsBytes(file.bytes!, flush: true);
-    if (mounted) setState(() => _logoPath = localFile.path);
   }
 
   @override

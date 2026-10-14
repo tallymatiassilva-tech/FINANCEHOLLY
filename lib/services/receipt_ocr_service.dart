@@ -66,9 +66,14 @@ class ReceiptOcrService {
     final picked = await _picker.pickImage(
       source: source,
       preferredCameraDevice: CameraDevice.rear,
+      maxWidth: 3000,
+      maxHeight: 3000,
       imageQuality: 90,
     );
     if (picked == null) return null;
+    if (await picked.length() > 15 * 1024 * 1024) {
+      throw const FormatException('A imagem deve ter no máximo 15 MB.');
+    }
 
     final text = await _recognizeText(picked.path);
     if (text.trim().isEmpty) {
@@ -80,8 +85,12 @@ class ReceiptOcrService {
   Future<String> _recognizeText(String path) async {
     final image = InputImage.fromFilePath(path);
     final recognizer = TextRecognizer();
-    final recognized = await recognizer.processImage(image);
-    return recognized.text;
+    try {
+      final recognized = await recognizer.processImage(image);
+      return recognized.text;
+    } finally {
+      await recognizer.close();
+    }
   }
 
   ReceiptScanResult _parseText(String rawText) {

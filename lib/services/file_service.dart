@@ -8,7 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_sqlcipher/sqflite.dart';
 
 import '../database/app_database.dart';
 
@@ -945,16 +945,11 @@ class FileService {
 
   Future<void> shareBackup({bool email = false}) async {
     await database.database.rawQuery('PRAGMA wal_checkpoint(FULL)');
-    final dbPath = p.join(
-      await getDatabasesPath(),
-      'controle_financeiro_igreja.db',
-    );
-    final source = File(dbPath);
-    if (!await source.exists()) throw StateError('Banco local não encontrado.');
     final directory = await getTemporaryDirectory();
-    final backup = await source.copy(
+    final backup = File(
       p.join(directory.path, 'backup_controle_financeiro.db'),
     );
+    await database.exportUnencryptedBackup(backup.path);
     await SharePlus.instance.share(
       ShareParams(
         files: [XFile(backup.path)],
@@ -975,16 +970,7 @@ class FileService {
     final path = picked.files.single.path;
     if (path == null)
       throw StateError('Não foi possível acessar o backup selecionado.');
-    final source = File(path);
-    final header = await source.open();
-    final signature = await header.read(16);
-    await header.close();
-    if (String.fromCharCodes(signature) != 'SQLite format 3\u0000') {
-      throw FormatException(
-        'O arquivo escolhido não parece ser um banco SQLite.',
-      );
-    }
-    final validation = await openDatabase(path, readOnly: true);
+    final validation = await database.openDatabaseForBackupValidation(path);
     try {
       final tables = await validation.rawQuery(
         "SELECT name FROM sqlite_master WHERE type = 'table'",
@@ -1008,27 +994,35 @@ class FileService {
     } finally {
       await validation.close();
     }
-    await database.database.rawQuery('PRAGMA wal_checkpoint(FULL)');
-    final target = File(
-      p.join(await getDatabasesPath(), 'controle_financeiro_igreja.db'),
-    );
-    final recoveryCopy = File(
-      p.join(
-        (await getTemporaryDirectory()).path,
-        'backup_anterior_${DateTime.now().microsecondsSinceEpoch}.db',
-      ),
-    );
-    await target.copy(recoveryCopy.path);
-    await database.close();
+    final restorePath = await database.prepareBackupForRestore(path);
     try {
-      await source.copy(target.path);
-      await database.open();
-    } catch (error, stackTrace) {
-      await recoveryCopy.copy(target.path);
-      await database.open();
-      Error.throwWithStackTrace(error, stackTrace);
+      await database.database.rawQuery('PRAGMA wal_checkpoint(FULL)');
+      final target = File(
+        p.join(await getDatabasesPath(), 'controle_financeiro_igreja.db'),
+      );
+      final recoveryCopy = File(
+        p.join(
+          (await getTemporaryDirectory()).path,
+          'backup_anterior_${DateTime.now().microsecondsSinceEpoch}.db',
+        ),
+      );
+      await target.copy(recoveryCopy.path);
+      await database.close();
+      try {
+        await File(restorePath).copy(target.path);
+        await database.open();
+      } catch (error, stackTrace) {
+        await recoveryCopy.copy(target.path);
+        await database.open();
+        Error.throwWithStackTrace(error, stackTrace);
+      } finally {
+        if (await recoveryCopy.exists()) await recoveryCopy.delete();
+      }
     } finally {
-      if (await recoveryCopy.exists()) await recoveryCopy.delete();
+      final restoreFile = File(restorePath);
+      if (await restoreFile.exists()) await restoreFile.delete();
+      final legacyFile = File('$restorePath.legacy');
+      if (await legacyFile.exists()) await legacyFile.delete();
     }
   }
 }

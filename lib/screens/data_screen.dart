@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
-import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_sqlcipher/sqflite.dart';
 
 import '../database/app_database.dart';
 import '../repositories/finance_repository.dart';
@@ -215,6 +215,39 @@ class _DataScreenState extends State<DataScreen> {
 
   bool get _canWrite => context.read<AppState>().user?['perfil'] != 'Consulta';
 
+  Future<void> _scanReceipt({
+    required ReceiptOcrService service,
+    required bool fromCamera,
+    required Map<String, TextEditingController> controllers,
+    required StateSetter setDialogState,
+    required BuildContext dialogContext,
+  }) async {
+    try {
+      final scanResult = fromCamera
+          ? await service.pickFromCamera()
+          : await service.pickFromGallery();
+      if (scanResult == null || !dialogContext.mounted || !mounted) return;
+      final fields = scanResult.toFields(
+        isExpense: widget.kind == DataKind.expense,
+      );
+      for (final entry in fields.entries) {
+        final controller = controllers[entry.key];
+        if (controller != null) controller.text = entry.value;
+      }
+      setDialogState(() {});
+      _message('Dados da imagem importados com sucesso. Revise os campos antes de salvar.');
+    } catch (error) {
+      if (mounted) {
+        final message = error is FormatException
+            ? error.message
+            : error.toString().replaceFirst('Exception: ', '');
+        _message(
+          'Não foi possível ler a imagem: $message',
+        );
+      }
+    }
+  }
+
   Future<void> _openForm({Map<String, Object?>? initial}) async {
     if (!_canWrite) {
       _message('Seu perfil tem acesso somente para consulta.');
@@ -257,50 +290,24 @@ class _DataScreenState extends State<DataScreen> {
                             children: [
                               IconButton(
                                 tooltip: 'Ler da câmera',
-                                onPressed: () async {
-                                  final scanResult = await receiptService
-                                      .pickFromCamera();
-                                  if (scanResult == null) return;
-                                  final fields = scanResult.toFields(
-                                    isExpense: widget.kind == DataKind.expense,
-                                  );
-                                  for (final entry in fields.entries) {
-                                    final controller = controllers[entry.key];
-                                    if (controller != null) {
-                                      controller.text = entry.value;
-                                    }
-                                  }
-                                  setDialogState(() {});
-                                  if (mounted) {
-                                    _message(
-                                      'Dados da nota importados com sucesso. Revise os campos antes de salvar.',
-                                    );
-                                  }
-                                },
+                                onPressed: () => _scanReceipt(
+                                  service: receiptService,
+                                  fromCamera: true,
+                                  controllers: controllers,
+                                  setDialogState: setDialogState,
+                                  dialogContext: dialogContext,
+                                ),
                                 icon: const Icon(Icons.camera_alt),
                               ),
                               IconButton(
                                 tooltip: 'Ler da galeria',
-                                onPressed: () async {
-                                  final scanResult = await receiptService
-                                      .pickFromGallery();
-                                  if (scanResult == null) return;
-                                  final fields = scanResult.toFields(
-                                    isExpense: widget.kind == DataKind.expense,
-                                  );
-                                  for (final entry in fields.entries) {
-                                    final controller = controllers[entry.key];
-                                    if (controller != null) {
-                                      controller.text = entry.value;
-                                    }
-                                  }
-                                  setDialogState(() {});
-                                  if (mounted) {
-                                    _message(
-                                      'Dados da imagem importados com sucesso. Revise os campos antes de salvar.',
-                                    );
-                                  }
-                                },
+                                onPressed: () => _scanReceipt(
+                                  service: receiptService,
+                                  fromCamera: false,
+                                  controllers: controllers,
+                                  setDialogState: setDialogState,
+                                  dialogContext: dialogContext,
+                                ),
                                 icon: const Icon(Icons.photo_library),
                               ),
                             ],

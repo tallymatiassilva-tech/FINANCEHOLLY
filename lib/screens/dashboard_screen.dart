@@ -30,7 +30,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<_DashboardData> _load(AppState state) async {
     final db = state.database;
     final income = await db.sum('entradas', 'valor');
-    final expenses = await db.sum('despesas', 'valor', where: "status = 'Pago'");
+    final expenses = await db.sum(
+      'despesas',
+      'valor',
+      whereColumn: 'status',
+      whereValue: 'Pago',
+    );
     final stockRows = await db.query('estoque');
     final totalSales = await db.sum('vendas_cantina', 'valor_total');
     final purchases = await db.sum('compras_cantina', 'valor_compra');

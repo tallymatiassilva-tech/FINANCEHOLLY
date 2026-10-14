@@ -6,7 +6,8 @@
     <application
         android:label="Controle Financeiro Igreja"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -47,4 +48,3 @@
         </intent>
     </queries>
 </manifest>
-

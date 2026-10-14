@@ -51,6 +51,24 @@ try {
         & $flutter.Source analyze --no-fatal-infos
         if ($LASTEXITCODE -ne 0) { throw "flutter analyze encontrou problemas (código $LASTEXITCODE)." }
 
+        $signingVariables = @(
+            'ANDROID_KEYSTORE_PATH',
+            'ANDROID_KEYSTORE_PASSWORD',
+            'ANDROID_KEY_ALIAS',
+            'ANDROID_KEY_PASSWORD'
+        )
+        $missingSigningVariables = @(
+            $signingVariables | Where-Object {
+                [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_))
+            }
+        )
+        if ($missingSigningVariables.Count -gt 0) {
+            throw "Configure as variáveis de assinatura de release: $($missingSigningVariables -join ', ')."
+        }
+        if (-not (Test-Path -LiteralPath $env:ANDROID_KEYSTORE_PATH -PathType Leaf)) {
+            throw 'O arquivo definido em ANDROID_KEYSTORE_PATH não foi encontrado.'
+        }
+
         & $flutter.Source build apk --release
         if ($LASTEXITCODE -ne 0) { throw "A compilação do APK falhou (código $LASTEXITCODE)." }
     }
