@@ -1,0 +1,24 @@
+workflows:
+  multi-platform-build:
+    name: Android APK & iOS Simulator Build
+    max_build_duration: 30
+    instance_type: mac_mini_m2
+    environment:
+      flutter: stable
+      xcode: latest
+    scripts:
+      - name: Get Flutter packages
+        script: flutter packages pub get
+        
+      - name: Build Android APK
+        script: flutter build apk --release
+        
+      - name: Build iOS Simulator App
+        script: |
+          flutter build ios --simulator --debug --no-codesign
+          cd build/ios/iphonesimulator
+          zip -r ../../../build/ios_simulator_app.zip *.app
+          
+    artifacts:
+      - build/app/outputs/flutter-apk/*.apk
+      - build/ios_simulator_app.zip
