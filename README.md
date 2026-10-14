@@ -1,6 +1,8 @@
 # Controle Financeiro Igreja
 
-Aplicativo Flutter offline-first para Android. As informações são armazenadas no SQLite do próprio aparelho; não há servidor, Firebase ou API externa.
+Aplicativo Flutter offline-first para gestão financeira de igrejas. Os dados permanecem no aparelho; não há servidor, Firebase ou API externa. O APK publicado está disponível na área **Releases**.
+
+Este repositório contém o projeto-fonte completo. O arquivo `PIRITUBA-APP-source.zip` também fornece um pacote pronto para extrair e abrir no Flutter.
 
 ## Executar e gerar APK
 
