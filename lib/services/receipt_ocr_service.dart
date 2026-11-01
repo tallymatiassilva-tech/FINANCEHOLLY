@@ -1,5 +1,12 @@
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:pdf/pdf.dart';
+import 'package:printing/printing.dart';
 
 class ReceiptScanResult {
   ReceiptScanResult({
@@ -10,6 +17,7 @@ class ReceiptScanResult {
     required this.category,
     required this.vendor,
     required this.responsible,
+    required this.entryType,
   });
 
   final String rawText;
@@ -19,6 +27,7 @@ class ReceiptScanResult {
   final String? category;
   final String? vendor;
   final String? responsible;
+  final String entryType; // 'entrada' ou 'despesa'
 
   Map<String, String> toFields({required bool isExpense}) {
     final fields = <String, String>{};
@@ -27,6 +36,7 @@ class ReceiptScanResult {
     }
     if (amount != null && amount!.isNotEmpty) {
       fields['valor'] = amount!;
+      fields['valor_total'] = amount!;
     }
     if (isExpense) {
       if (category != null && category!.isNotEmpty) {
@@ -58,11 +68,57 @@ class ReceiptOcrService {
 
   final ImagePicker _picker;
 
-  Future<ReceiptScanResult?> pickFromCamera() => _scan(ImageSource.camera);
+  Future<ReceiptScanResult?> pickFromCamera() => _scanImageSource(ImageSource.camera);
 
-  Future<ReceiptScanResult?> pickFromGallery() => _scan(ImageSource.gallery);
+  Future<ReceiptScanResult?> pickFromGallery() => _scanImageSource(ImageSource.gallery);
 
-  Future<ReceiptScanResult?> _scan(ImageSource source) async {
+  Future<ReceiptScanResult?> pickFromPdf() async {
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['pdf'],
+      withData: true,
+    );
+    if (picked == null) return null;
+
+    final fileBytes = picked.files.single.bytes;
+    final filePath = picked.files.single.path;
+
+    Uint8List? bytes = fileBytes;
+    if (bytes == null && filePath != null) {
+      bytes = await File(filePath).readAsBytes();
+    }
+    if (bytes == null || bytes.isEmpty) {
+      throw const FormatException('Não foi possível ler o arquivo PDF selecionado.');
+    }
+
+    final rasterStream = Printing.raster(bytes, pages: [0], dpi: 200);
+    String? tempImagePath;
+    await for (final page in rasterStream) {
+      final pngBytes = await page.toPng();
+      final tempDir = await getTemporaryDirectory();
+      final tempFile = File('${tempDir.path}/pdf_ocr_${DateTime.now().microsecondsSinceEpoch}.png');
+      await tempFile.writeAsBytes(pngBytes, flush: true);
+      tempImagePath = tempFile.path;
+      break;
+    }
+
+    if (tempImagePath == null) {
+      throw const FormatException('Não foi possível renderizar a página do PDF para leitura OCR.');
+    }
+
+    try {
+      final text = await _recognizeText(tempImagePath);
+      if (text.trim().isEmpty) return null;
+      return _parseText(text);
+    } finally {
+      final tempFile = File(tempImagePath);
+      if (await tempFile.exists()) {
+        await tempFile.delete().catchError((_) => tempFile);
+      }
+    }
+  }
+
+  Future<ReceiptScanResult?> _scanImageSource(ImageSource source) async {
     final picked = await _picker.pickImage(
       source: source,
       preferredCameraDevice: CameraDevice.rear,
@@ -71,8 +127,8 @@ class ReceiptOcrService {
       imageQuality: 90,
     );
     if (picked == null) return null;
-    if (await picked.length() > 15 * 1024 * 1024) {
-      throw const FormatException('A imagem deve ter no máximo 15 MB.');
+    if (await picked.length() > 20 * 1024 * 1024) {
+      throw const FormatException('A imagem deve ter no máximo 20 MB.');
     }
 
     final text = await _recognizeText(picked.path);
@@ -105,7 +161,8 @@ class ReceiptOcrService {
     final amount = _extractAmount(rawText);
     final description = _extractDescription(lines, amount, date);
     final vendor = _extractVendor(lines, description, amount, date);
-    final category = _extractCategory(rawText);
+    final entryType = _classifyEntryType(rawText);
+    final category = _extractCategory(rawText, entryType);
     final responsible = _extractResponsible(lines, description);
 
     return ReceiptScanResult(
@@ -116,14 +173,48 @@ class ReceiptOcrService {
       category: category,
       vendor: vendor,
       responsible: responsible,
+      entryType: entryType,
     );
   }
 
+  String _classifyEntryType(String text) {
+    final lower = text.toLowerCase();
+    final incomeKeywords = [
+      'dizimo', 'dízimo', 'oferta', 'doacao', 'doação', 'contribuicao', 'contribuição',
+      'recebimento', 'pix recebido', 'credito', 'crédito', 'transferencia recebida',
+      'deposito', 'depósito', 'entrada', 'receita', 'campanha'
+    ];
+    final expenseKeywords = [
+      'comprovante de pagamento', 'pagamento', 'pix enviado', 'debito', 'débito',
+      'nota fiscal', 'nf-e', 'nfe', 'cupom fiscal', 'vencimento', 'boleto', 'fatura',
+      'despesa', 'saida', 'saída', 'fornecedor', 'compra', 'valor a pagar'
+    ];
+
+    int incomeScore = 0;
+    int expenseScore = 0;
+
+    for (final kw in incomeKeywords) {
+      if (lower.contains(kw)) incomeScore++;
+    }
+    for (final kw in expenseKeywords) {
+      if (lower.contains(kw)) expenseScore++;
+    }
+
+    if (incomeScore > expenseScore) return 'entrada';
+    if (expenseScore > incomeScore) return 'despesa';
+    return 'despesa';
+  }
+
   String? _extractAmount(String text) {
+    final sanitizedText = text
+        .replaceAll(RegExp(r'\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}'), '')
+        .replaceAll(RegExp(r'\d{3}\.\d{3}\.\d{3}-\d{2}'), '')
+        .replaceAll(RegExp(r'\(\d{2}\)\s*\d{4,5}-\d{4}'), '');
+
     final matches = RegExp(
       r'(?:R\$\s*|RS\s*|\b)(\d{1,3}(?:[.\s]\d{3})+|\d+)(?:[.,](\d{1,2}))?',
       caseSensitive: false,
-    ).allMatches(text);
+    ).allMatches(sanitizedText);
 
     String? bestValue;
     double bestNumber = 0;
@@ -131,13 +222,13 @@ class ReceiptOcrService {
     for (final match in matches) {
       final group = match.group(0)?.trim() ?? '';
       final cleaned = group
-          .replaceAll(RegExp(r'[^0-9,\.\s]'), '')
+          .replaceAll(RegExp(r'[^0-9,.\s]'), '')
           .replaceAll(RegExp(r'\s+'), '')
           .replaceAll('.', '')
           .replaceAll(',', '.');
       if (cleaned.isEmpty) continue;
       final parsed = double.tryParse(cleaned);
-      if (parsed == null || parsed <= 0) continue;
+      if (parsed == null || parsed <= 0 || parsed > 1000000) continue;
       if (parsed > bestNumber) {
         bestNumber = parsed;
         bestValue = parsed.toStringAsFixed(2).replaceAll('.', ',');
@@ -199,37 +290,46 @@ class ReceiptOcrService {
     return null;
   }
 
-  String? _extractCategory(String text) {
+  String? _extractCategory(String text, String entryType) {
     final lower = text.toLowerCase();
-    final incomeKeywords = {
-      'dizimo': 'Dízimos',
-      'oferta': 'Ofertas',
-      'doacao': 'Doações',
-      'campanha': 'Campanhas',
-      'evento': 'Eventos',
-      'missao': 'Missões',
-      'ofertas': 'Ofertas',
-      'doações': 'Doações',
-    };
-    final expenseKeywords = {
-      'agua': 'Água',
-      'energia': 'Energia',
-      'internet': 'Internet',
-      'limpeza': 'Limpeza',
-      'manutencao': 'Manutenção',
-      'salario': 'Salários',
-      'evento': 'Eventos',
-      'missao': 'Missões',
-      'outros': 'Outros',
-    };
-
-    for (final entry in incomeKeywords.entries) {
-      if (lower.contains(entry.key)) return entry.value;
+    if (entryType == 'entrada') {
+      final incomeCategories = {
+        'dizimo': 'Dízimos',
+        'dízimo': 'Dízimos',
+        'oferta': 'Ofertas',
+        'doacao': 'Doações',
+        'doação': 'Doações',
+        'campanha': 'Campanhas',
+        'evento': 'Eventos',
+        'missao': 'Missões',
+        'missão': 'Missões',
+      };
+      for (final entry in incomeCategories.entries) {
+        if (lower.contains(entry.key)) return entry.value;
+      }
+      return 'Outros';
+    } else {
+      final expenseCategories = {
+        'agua': 'Água',
+        'água': 'Água',
+        'energia': 'Energia',
+        'luz': 'Energia',
+        'internet': 'Internet',
+        'telefonia': 'Internet',
+        'limpeza': 'Limpeza',
+        'manutencao': 'Manutenção',
+        'manutenção': 'Manutenção',
+        'salario': 'Salários',
+        'salário': 'Salários',
+        'evento': 'Eventos',
+        'missao': 'Missões',
+        'missão': 'Missões',
+      };
+      for (final entry in expenseCategories.entries) {
+        if (lower.contains(entry.key)) return entry.value;
+      }
+      return 'Outros';
     }
-    for (final entry in expenseKeywords.entries) {
-      if (lower.contains(entry.key)) return entry.value;
-    }
-    return null;
   }
 
   String? _extractDescription(List<String> lines, String? amount, String? date) {
@@ -302,7 +402,9 @@ class ReceiptOcrService {
           .replaceAll(RegExp(r'[^A-Za-zÀ-ÖØ-öø-ÿ0-9\s/\-.,]'), '')
           .trim();
       if (normalized.isEmpty || normalized == description) continue;
-      if (normalized.toLowerCase().contains('respons') || normalized.toLowerCase().contains('doacao') || normalized.toLowerCase().contains('dizimo')) {
+      if (normalized.toLowerCase().contains('respons') ||
+          normalized.toLowerCase().contains('doacao') ||
+          normalized.toLowerCase().contains('dizimo')) {
         return normalized;
       }
     }

@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:intl/date_symbol_data_local.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import 'database/app_database.dart';
@@ -8,6 +10,8 @@ import 'services/app_state.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await initializeDateFormatting();
+  Intl.defaultLocale = 'pt_BR';
   final database = AppDatabase();
   await database.open();
   runApp(

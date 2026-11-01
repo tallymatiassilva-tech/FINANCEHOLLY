@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="feature-sqflite_sqlcipher">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/build/sqflite_sqlcipher/intermediates/merged_java_res/debug/mergeDebugJavaResource/feature-sqflite_sqlcipher.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

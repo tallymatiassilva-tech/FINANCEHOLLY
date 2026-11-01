@@ -22,7 +22,6 @@ class _AppShellState extends State<AppShell> {
     'Despesas',
     'Fluxo de Caixa',
     'Cantina',
-    'Estoque',
     'Relatórios',
     'Configurações',
   ];
@@ -32,23 +31,25 @@ class _AppShellState extends State<AppShell> {
     Icons.north_east,
     Icons.account_balance_wallet_outlined,
     Icons.storefront_outlined,
-    Icons.inventory_2_outlined,
     Icons.insert_chart_outlined,
     Icons.settings_outlined,
   ];
 
   @override
   Widget build(BuildContext context) {
-    final pages = [
-      const DashboardScreen(),
-      const DataScreen(title: 'Entradas', table: 'entradas', kind: DataKind.income),
-      const DataScreen(title: 'Despesas', table: 'despesas', kind: DataKind.expense),
-      const DataScreen(title: 'Fluxo de Caixa', table: 'fluxocaixa', kind: DataKind.cashflow),
-      const DataScreen(title: 'Cantina', table: 'vendas_cantina', kind: DataKind.canteen),
-      const DataScreen(title: 'Estoque', table: 'estoque', kind: DataKind.stock),
-      const DataScreen(title: 'Relatórios', table: 'entradas', kind: DataKind.reports),
-      const SettingsScreen(),
-    ];
+    final user = context.watch<AppState>().user;
+
+    final activePage = switch (_selected) {
+      0 => const DashboardScreen(),
+      1 => const DataScreen(title: 'Entradas', table: 'entradas', kind: DataKind.income),
+      2 => const DataScreen(title: 'Despesas', table: 'despesas', kind: DataKind.expense),
+      3 => const DataScreen(title: 'Fluxo de Caixa', table: 'fluxocaixa', kind: DataKind.cashflow),
+      4 => const DataScreen(title: 'Cantina', table: 'vendas_cantina', kind: DataKind.canteen),
+      5 => const DataScreen(title: 'Relatórios', table: 'entradas', kind: DataKind.reports),
+      6 => const SettingsScreen(),
+      _ => const SizedBox.shrink(),
+    };
+
     return Scaffold(
       appBar: AppBar(
         title: Text(_labels[_selected]),
@@ -56,7 +57,14 @@ class _AppShellState extends State<AppShell> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),
             child: Center(
-              child: Text(context.watch<AppState>().user?['nome']?.toString() ?? ''),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 160),
+                child: Text(
+                  '${user?['nome']?.toString() ?? ''} · ${user?['perfil']?.toString() ?? ''}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             ),
           ),
           IconButton(
@@ -66,7 +74,7 @@ class _AppShellState extends State<AppShell> {
           ),
         ],
       ),
-      body: IndexedStack(index: _selected, children: pages),
+      body: activePage,
       bottomNavigationBar: SafeArea(
         child: SizedBox(
           height: 68,

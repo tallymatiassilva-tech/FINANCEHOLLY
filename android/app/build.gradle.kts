@@ -14,23 +14,6 @@ val releaseSigningVariables = listOf(
 )
 val releaseSigningValues = releaseSigningVariables.associateWith { System.getenv(it) }
 
-gradle.taskGraph.whenReady {
-    if (allTasks.any { it.name.contains("Release") }) {
-        val missing = releaseSigningVariables.filter {
-            releaseSigningValues[it].isNullOrBlank()
-        }
-        if (missing.isNotEmpty()) {
-            throw GradleException(
-                "Release signing is not configured. Set: ${missing.joinToString()}",
-            )
-        }
-        val keystorePath = releaseSigningValues.getValue("ANDROID_KEYSTORE_PATH")!!
-        if (!File(keystorePath).isFile) {
-            throw GradleException("Keystore not found at ANDROID_KEYSTORE_PATH.")
-        }
-    }
-}
-
 android {
     namespace = "br.org.pirituba.controle_financeiro_igreja"
     compileSdk = flutter.compileSdkVersion
@@ -67,9 +50,13 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("release")
+            val hasKeystore = releaseSigningValues.values.all { !it.isNullOrBlank() } &&
+                releaseSigningValues["ANDROID_KEYSTORE_PATH"]?.let { File(it).isFile } == true
+            if (hasKeystore) {
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                signingConfig = signingConfigs.getByName("debug")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

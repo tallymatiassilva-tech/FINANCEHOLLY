@@ -8,6 +8,7 @@ import '../repositories/finance_repository.dart';
 import '../services/app_state.dart';
 import '../services/file_service.dart';
 import '../services/receipt_ocr_service.dart';
+import '../widgets/dialog_controller_owner.dart';
 import '../widgets/empty_state.dart';
 
 enum DataKind { income, expense, cashflow, canteen, stock, reports }
@@ -72,6 +73,7 @@ class _DataScreenState extends State<DataScreen> {
     ],
     DataKind.expense => const [
       _Field('data', 'Data (AAAA-MM-DD)'),
+      _Field('vencimento', 'Vencimento (AAAA-MM-DD)'),
       _Field(
         'categoria',
         'Categoria',
@@ -120,7 +122,10 @@ class _DataScreenState extends State<DataScreen> {
       }
     }
     if (field.numeric) {
-      final number = double.tryParse(value.replaceAll(',', '.'));
+      final normalized = value.contains(',') && value.contains('.')
+          ? value.replaceAll('.', '').replaceAll(',', '.')
+          : value.replaceAll(',', '.');
+      final number = double.tryParse(normalized);
       if (number == null ||
           number < 0 ||
           (field.name == 'quantidade' &&
@@ -217,15 +222,17 @@ class _DataScreenState extends State<DataScreen> {
 
   Future<void> _scanReceipt({
     required ReceiptOcrService service,
-    required bool fromCamera,
+    required String scanType,
     required Map<String, TextEditingController> controllers,
     required StateSetter setDialogState,
     required BuildContext dialogContext,
   }) async {
     try {
-      final scanResult = fromCamera
-          ? await service.pickFromCamera()
-          : await service.pickFromGallery();
+      final scanResult = switch (scanType) {
+        'camera' => await service.pickFromCamera(),
+        'pdf' => await service.pickFromPdf(),
+        _ => await service.pickFromGallery(),
+      };
       if (scanResult == null || !dialogContext.mounted || !mounted) return;
       final fields = scanResult.toFields(
         isExpense: widget.kind == DataKind.expense,
@@ -235,22 +242,26 @@ class _DataScreenState extends State<DataScreen> {
         if (controller != null) controller.text = entry.value;
       }
       setDialogState(() {});
-      _message('Dados da imagem importados com sucesso. Revise os campos antes de salvar.');
+      final typeLabel = scanResult.entryType == 'entrada' ? 'Entrada' : 'Despesa';
+      _message(
+        'Documento ($typeLabel) lido com sucesso via OCR! Revise os campos antes de salvar.',
+      );
     } catch (error) {
       if (mounted) {
         final message = error is FormatException
             ? error.message
             : error.toString().replaceFirst('Exception: ', '');
-        _message(
-          'Não foi possível ler a imagem: $message',
-        );
+        _message('Não foi possível ler o documento: $message');
       }
     }
   }
 
   Future<void> _openForm({Map<String, Object?>? initial}) async {
     if (!_canWrite) {
-      _message('Seu perfil tem acesso somente para consulta.');
+      _message(
+        'Seu perfil Consulta permite apenas visualizar. Entre com uma conta '
+        'Administrador ou Tesoureiro para cadastrar.',
+      );
       return;
     }
     final controllers = <String, TextEditingController>{};
@@ -263,8 +274,9 @@ class _DataScreenState extends State<DataScreen> {
       controllers[field.name] = TextEditingController(text: value);
     }
     final formKey = GlobalKey<FormState>();
-    await showDialog<void>(
+    await showDialogWithControllers<void>(
       context: context,
+      controllers: controllers.values,
       builder: (dialogContext) {
         final receiptService = ReceiptOcrService();
         return StatefulBuilder(
@@ -283,32 +295,60 @@ class _DataScreenState extends State<DataScreen> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: Wrap(
-                            spacing: 8,
+                        Container(
+                          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.4),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              IconButton(
-                                tooltip: 'Ler da câmera',
-                                onPressed: () => _scanReceipt(
-                                  service: receiptService,
-                                  fromCamera: true,
-                                  controllers: controllers,
-                                  setDialogState: setDialogState,
-                                  dialogContext: dialogContext,
-                                ),
-                                icon: const Icon(Icons.camera_alt),
+                              Text(
+                                'Leitura Automática OCR (Foto / Imagem / PDF)',
+                                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                                      fontWeight: FontWeight.bold,
+                                      color: Theme.of(context).colorScheme.primary,
+                                    ),
                               ),
-                              IconButton(
-                                tooltip: 'Ler da galeria',
-                                onPressed: () => _scanReceipt(
-                                  service: receiptService,
-                                  fromCamera: false,
-                                  controllers: controllers,
-                                  setDialogState: setDialogState,
-                                  dialogContext: dialogContext,
-                                ),
-                                icon: const Icon(Icons.photo_library),
+                              const SizedBox(height: 6),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                children: [
+                                  IconButton.filledTonal(
+                                    tooltip: 'Tirar Foto (Câmera)',
+                                    onPressed: () => _scanReceipt(
+                                      service: receiptService,
+                                      scanType: 'camera',
+                                      controllers: controllers,
+                                      setDialogState: setDialogState,
+                                      dialogContext: dialogContext,
+                                    ),
+                                    icon: const Icon(Icons.camera_alt),
+                                  ),
+                                  IconButton.filledTonal(
+                                    tooltip: 'Imagem JPG / PNG',
+                                    onPressed: () => _scanReceipt(
+                                      service: receiptService,
+                                      scanType: 'gallery',
+                                      controllers: controllers,
+                                      setDialogState: setDialogState,
+                                      dialogContext: dialogContext,
+                                    ),
+                                    icon: const Icon(Icons.photo_library),
+                                  ),
+                                  IconButton.filledTonal(
+                                    tooltip: 'PDF Digitalizado',
+                                    onPressed: () => _scanReceipt(
+                                      service: receiptService,
+                                      scanType: 'pdf',
+                                      controllers: controllers,
+                                      setDialogState: setDialogState,
+                                      dialogContext: dialogContext,
+                                    ),
+                                    icon: const Icon(Icons.picture_as_pdf),
+                                  ),
+                                ],
                               ),
                             ],
                           ),
@@ -459,9 +499,6 @@ class _DataScreenState extends State<DataScreen> {
         );
       },
     );
-    for (final controller in controllers.values) {
-      controller.dispose();
-    }
   }
 
   Future<void> _openStockForm({Map<String, Object?>? initial}) async {
@@ -483,8 +520,9 @@ class _DataScreenState extends State<DataScreen> {
       controllers[field.name] = TextEditingController(text: value);
     }
     final formKey = GlobalKey<FormState>();
-    await showDialog<void>(
+    await showDialogWithControllers<void>(
       context: context,
+      controllers: controllers.values,
       builder: (dialogContext) => AlertDialog(
         title: Text(
           initial == null
@@ -578,9 +616,6 @@ class _DataScreenState extends State<DataScreen> {
         ],
       ),
     );
-    for (final controller in controllers.values) {
-      controller.dispose();
-    }
   }
 
   Future<void> _saveSale(
@@ -730,8 +765,10 @@ class _DataScreenState extends State<DataScreen> {
   ) async {
     final controller = TextEditingController();
     final db = context.read<AppState>().database.database;
-    final ok = await showDialog<bool>(
+    var amountText = '';
+    final ok = await showDialogWithControllers<bool>(
       context: context,
+      controllers: [controller],
       builder: (dialogContext) => AlertDialog(
         title: Text('$action: ${product['produto']}'),
         content: TextField(
@@ -748,18 +785,18 @@ class _DataScreenState extends State<DataScreen> {
             child: const Text('Cancelar'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
+            onPressed: () {
+              amountText = controller.text;
+              Navigator.pop(dialogContext, true);
+            },
             child: const Text('Confirmar'),
           ),
         ],
       ),
     );
-    if (ok != true) {
-      controller.dispose();
-      return;
-    }
+    if (ok != true) return;
     try {
-      final amount = double.parse(controller.text.replaceAll(',', '.'));
+      final amount = double.parse(amountText.replaceAll(',', '.'));
       if (amount <= 0 && action != 'Ajuste')
         throw ArgumentError('Informe uma quantidade maior que zero.');
       await db.transaction((txn) async {
@@ -791,8 +828,6 @@ class _DataScreenState extends State<DataScreen> {
       if (mounted) setState(_refresh);
     } catch (error) {
       if (mounted) _message('Não foi possível atualizar o estoque: $error');
-    } finally {
-      controller.dispose();
     }
   }
 
@@ -873,8 +908,9 @@ class _DataScreenState extends State<DataScreen> {
   Future<void> _filterDates() async {
     final start = TextEditingController(text: _startDate);
     final end = TextEditingController(text: _endDate);
-    await showDialog<void>(
+    await showDialogWithControllers<void>(
       context: context,
+      controllers: [start, end],
       builder: (dialogContext) => AlertDialog(
         title: const Text('Filtrar período'),
         content: Column(
@@ -915,12 +951,108 @@ class _DataScreenState extends State<DataScreen> {
         ],
       ),
     );
-    start.dispose();
-    end.dispose();
   }
 
   void _message(String value) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(value)));
+  }
+
+  Widget _buildTabSummaryHeader(List<Map<String, Object?>> rows) {
+    if (widget.kind == DataKind.income) {
+      final total = rows.fold<double>(
+        0.0,
+        (sum, row) => sum + ((row['valor'] as num?)?.toDouble() ?? 0.0),
+      );
+      return Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.green.shade50,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.green.shade300),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.south_west, color: Colors.green.shade800),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Aba Entradas (Apenas Receitas)',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.green.shade900,
+                      fontSize: 12,
+                    ),
+                  ),
+                  Text(
+                    'Total acumulado no período: R\$ ${total.toStringAsFixed(2)}',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: Colors.green.shade900,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    if (widget.kind == DataKind.expense) {
+      double totalPagas = 0;
+      double totalPendentes = 0;
+      for (final row in rows) {
+        final valor = (row['valor'] as num?)?.toDouble() ?? 0.0;
+        if (row['status'] == 'Pago') {
+          totalPagas += valor;
+        } else {
+          totalPendentes += valor;
+        }
+      }
+      return Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.red.shade50,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.red.shade300),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.north_east, color: Colors.red.shade800),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Aba Despesas (Apenas Gastos)',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.red.shade900,
+                      fontSize: 12,
+                    ),
+                  ),
+                  Text(
+                    'Pagas: R\$ ${totalPagas.toStringAsFixed(2)} · Pendentes: R\$ ${totalPendentes.toStringAsFixed(2)}',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: Colors.red.shade900,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    return const SizedBox.shrink();
   }
 
   @override
@@ -949,12 +1081,13 @@ class _DataScreenState extends State<DataScreen> {
                 onPressed: _filterDates,
                 icon: const Icon(Icons.date_range),
               ),
-              if (_canWrite)
-                IconButton(
-                  tooltip: 'Adicionar',
-                  onPressed: () => _openForm(),
-                  icon: const Icon(Icons.add_circle),
-                ),
+              IconButton(
+                tooltip: _canWrite
+                    ? 'Adicionar'
+                    : 'Cadastro indisponível para o perfil Consulta',
+                onPressed: () => _openForm(),
+                icon: const Icon(Icons.add_circle),
+              ),
             ],
           ),
         ),
@@ -978,11 +1111,23 @@ class _DataScreenState extends State<DataScreen> {
                 );
               final rows = _filtered(snapshot.data ?? []);
               if (rows.isEmpty)
-                return const EmptyState(message: 'Nenhum registro encontrado.');
-              return ListView.builder(
-                padding: const EdgeInsets.all(12),
-                itemCount: rows.length,
-                itemBuilder: (context, index) => _recordCard(rows[index]),
+                return Column(
+                  children: [
+                    _buildTabSummaryHeader(rows),
+                    const Expanded(child: EmptyState(message: 'Nenhum registro encontrado.')),
+                  ],
+                );
+              return Column(
+                children: [
+                  _buildTabSummaryHeader(rows),
+                  Expanded(
+                    child: ListView.builder(
+                      padding: const EdgeInsets.all(12),
+                      itemCount: rows.length,
+                      itemBuilder: (context, index) => _recordCard(rows[index]),
+                    ),
+                  ),
+                ],
               );
             },
           ),
@@ -1072,6 +1217,7 @@ class _DataScreenState extends State<DataScreen> {
 
   String _label(String key) => switch (key) {
     'data' => 'Data',
+    'vencimento' => 'Vencimento',
     'valor' => 'Valor',
     'valor_total' => 'Total',
     'valor_unitario' => 'Unitário',
@@ -1080,6 +1226,7 @@ class _DataScreenState extends State<DataScreen> {
     'forma_pagamento' => 'Pagamento',
     'saldo_diario' => 'Saldo diário',
     'saldo_acumulado' => 'Saldo acumulado',
+    'status' => 'Status',
     _ => key,
   };
 
@@ -1385,8 +1532,10 @@ class _DataScreenState extends State<DataScreen> {
     final quantity = TextEditingController();
     final cost = TextEditingController();
     final form = GlobalKey<FormState>();
-    final saved = await showDialog<bool>(
+    (String, String, String, String)? purchaseValues;
+    final saved = await showDialogWithControllers<bool>(
       context: context,
+      controllers: [product, supplier, quantity, cost],
       builder: (dialogContext) => AlertDialog(
         title: const Text('Compra para cantina'),
         content: Form(
@@ -1437,8 +1586,15 @@ class _DataScreenState extends State<DataScreen> {
           ),
           FilledButton(
             onPressed: () {
-              if (form.currentState!.validate())
+              if (form.currentState!.validate()) {
+                purchaseValues = (
+                  product.text.trim(),
+                  supplier.text.trim(),
+                  quantity.text.trim(),
+                  cost.text.trim(),
+                );
                 Navigator.pop(dialogContext, true);
+              }
             },
             child: const Text('Salvar'),
           ),
@@ -1447,28 +1603,29 @@ class _DataScreenState extends State<DataScreen> {
     );
     if (saved == true) {
       try {
+        final values = purchaseValues;
+        if (values == null) {
+          throw StateError('Os dados da compra não foram capturados.');
+        }
         await db.transaction((txn) async {
           final matches = await txn.query(
             'estoque',
             where: 'produto = ?',
-            whereArgs: [product.text.trim()],
+            whereArgs: [values.$1],
             limit: 1,
           );
           if (matches.isEmpty)
             throw StateError('Cadastre o produto no estoque antes da compra.');
           final item = matches.first;
-          final amount = double.parse(quantity.text.replaceAll(',', '.'));
-          final costValue = double.parse(cost.text.replaceAll(',', '.'));
+          final amount = double.parse(values.$3.replaceAll(',', '.'));
+          final costValue = double.parse(values.$4.replaceAll(',', '.'));
           final productId = item['id'] as int;
           await txn.insert('compras_cantina', {
             'data': DateFormat('yyyy-MM-dd').format(DateTime.now()),
             'produto_id': productId,
-            'produto': product.text.trim(),
-            'fornecedor_id': await _findOrCreateSupplier(
-              txn,
-              supplier.text.trim(),
-            ),
-            'fornecedor': supplier.text.trim(),
+            'produto': values.$1,
+            'fornecedor_id': await _findOrCreateSupplier(txn, values.$2),
+            'fornecedor': values.$2,
             'quantidade': amount,
             'valor_compra': costValue,
           });
@@ -1491,10 +1648,6 @@ class _DataScreenState extends State<DataScreen> {
         if (mounted) _message('Não foi possível registrar a compra: $error');
       }
     }
-    product.dispose();
-    supplier.dispose();
-    quantity.dispose();
-    cost.dispose();
   }
 
   Future<int?> _findOrCreateSupplier(
@@ -1691,6 +1844,16 @@ class _DataScreenState extends State<DataScreen> {
                   _runFileAction(() => service.restoreBackup()),
             ),
           ),
+        const Divider(),
+        ListTile(
+          leading: const Icon(Icons.security, color: Colors.blue),
+          title: const Text('Logs de Auditoria e Segurança (LGPD)'),
+          subtitle: const Text(
+            'Histórico de autenticações biométricas, operações e dispositivos',
+          ),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: _showAuditLogsDialog,
+        ),
       ],
     );
   }
@@ -1795,10 +1958,71 @@ class _DataScreenState extends State<DataScreen> {
   }
 
   Future<void> _runFileAction(Future<void> Function() action) async {
+    final state = context.read<AppState>();
+    final bioOk = await state.authenticateBiometric(
+      reason: 'Autentique-se por biometria para exportar relatórios ou gerenciar backups',
+      operation: 'Exportação / Relatório / Backup',
+    );
+    if (!bioOk) {
+      _message('Ação cancelada: validação biométrica obrigatória.');
+      return;
+    }
     try {
       await action();
     } catch (error) {
       if (mounted) _message('Operação não concluída: $error');
     }
+  }
+
+  Future<void> _showAuditLogsDialog() async {
+    final state = context.read<AppState>();
+    final bioOk = await state.authenticateBiometric(
+      reason: 'Autentique-se por biometria para consultar os logs de auditoria LGPD',
+      operation: 'Consulta de Logs de Auditoria LGPD',
+    );
+    if (!bioOk) {
+      _message('Acesso negado: validação biométrica obrigatória.');
+      return;
+    }
+    final logs = await state.auditService.fetchLogs(limit: 150);
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Logs de Auditoria e Segurança (LGPD)'),
+        content: SizedBox(
+          width: 520,
+          height: 420,
+          child: logs.isEmpty
+              ? const Center(child: Text('Nenhum registro de auditoria encontrado.'))
+              : ListView.separated(
+                  itemCount: logs.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final log = logs[index];
+                    return ListTile(
+                      isThreeLine: true,
+                      dense: true,
+                      leading: const Icon(Icons.shield_outlined, size: 28),
+                      title: Text('${log.operation} (${log.userName ?? "Sistema"})'),
+                      subtitle: Text(
+                        'Autenticação: ${log.authType}\n'
+                        'Data/Hora: ${log.dateTime}\n'
+                        'Dispositivo: ${log.device ?? "Móvel"} · IP: ${log.ipAddress ?? "127.0.0.1"}\n'
+                        'Detalhes: ${log.details ?? "-"}',
+                      ),
+                    );
+                  },
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Fechar'),
+          ),
+        ],
+      ),
+    );
   }
 }

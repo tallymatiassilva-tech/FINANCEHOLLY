@@ -1,0 +1,11 @@
+<component name="libraryTable">
+  <library name="segmenter2">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/build/app/intermediates/compressed_assets/debug/compressDebugAssets/out/assets/mlkit-google-ocr-models/taser/segmenter/tflite_script_detector_0.3.bincfg.jar!/" />
+      <root url="jar://$PROJECT_DIR$/build/app/intermediates/compressed_assets/debug/compressDebugAssets/out/assets/mlkit-google-ocr-models/taser/segmenter/tflite_script_detector_0.3.conv_model.jar!/" />
+      <root url="jar://$PROJECT_DIR$/build/app/intermediates/compressed_assets/debug/compressDebugAssets/out/assets/mlkit-google-ocr-models/taser/segmenter/tflite_script_detector_0.3.lstm_model.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

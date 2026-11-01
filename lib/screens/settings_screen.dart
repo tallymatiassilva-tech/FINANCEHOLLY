@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import 'package:sqflite_sqlcipher/sqflite.dart';
 
 import '../services/app_state.dart';
+import '../widgets/dialog_controller_owner.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -63,21 +64,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     final db = context.read<AppState>().database.database;
     for (final item in _keys) {
-      await db.insert(
-        'configuracoes',
-        {'chave': item.$1, 'valor': _controllers[item.$1]!.text.trim()},
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+      await db.insert('configuracoes', {
+        'chave': item.$1,
+        'valor': _controllers[item.$1]!.text.trim(),
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
     if (_logoPath != null) {
-      await db.insert(
-        'configuracoes',
-        {'chave': 'logo_path', 'valor': _logoPath!},
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+      await db.insert('configuracoes', {
+        'chave': 'logo_path',
+        'valor': _logoPath!,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Configurações salvas no aparelho.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Configurações salvas no aparelho.')),
+      );
     }
   }
 
@@ -87,8 +88,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final password = TextEditingController();
     final recovery = TextEditingController();
     var role = 'Tesoureiro';
-    final saved = await showDialog<bool>(
+    final saved = await showDialogWithControllers<bool>(
       context: context,
+      controllers: [name, username, password, recovery],
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
           title: const Text('Cadastrar usuário'),
@@ -96,23 +98,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                TextField(controller: name, decoration: const InputDecoration(labelText: 'Nome')),
-                TextField(controller: username, decoration: const InputDecoration(labelText: 'Usuário')),
+                TextField(
+                  controller: name,
+                  decoration: const InputDecoration(labelText: 'Nome'),
+                ),
+                TextField(
+                  controller: username,
+                  decoration: const InputDecoration(labelText: 'Usuário'),
+                ),
                 TextField(
                   controller: password,
                   obscureText: true,
-                  decoration: const InputDecoration(labelText: 'Senha (mínimo 6 caracteres)'),
+                  decoration: const InputDecoration(
+                    labelText: 'Senha (mínimo 6 caracteres)',
+                  ),
                 ),
                 TextField(
                   controller: recovery,
                   obscureText: true,
-                  decoration: const InputDecoration(labelText: 'Chave de recuperação (mínimo 6 caracteres)'),
+                  decoration: const InputDecoration(
+                    labelText: 'Chave de recuperação (mínimo 6 caracteres)',
+                  ),
                 ),
                 DropdownButtonFormField<String>(
                   initialValue: role,
                   decoration: const InputDecoration(labelText: 'Perfil'),
                   items: const ['Administrador', 'Tesoureiro', 'Consulta']
-                      .map((value) => DropdownMenuItem(value: value, child: Text(value)))
+                      .map(
+                        (value) =>
+                            DropdownMenuItem(value: value, child: Text(value)),
+                      )
                       .toList(),
                   onChanged: (value) {
                     if (value != null) setDialogState(() => role = value);
@@ -122,17 +137,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancelar')),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancelar'),
+            ),
             FilledButton(
               onPressed: () async {
                 try {
                   await context.read<AppState>().register(
-                        name: name.text,
-                        username: username.text,
-                        password: password.text,
-                        recoveryKey: recovery.text,
-                        role: role,
-                      );
+                    name: name.text,
+                    username: username.text,
+                    password: password.text,
+                    recoveryKey: recovery.text,
+                    role: role,
+                  );
                   if (dialogContext.mounted) Navigator.pop(dialogContext, true);
                 } catch (error) {
                   if (mounted) _message('Não foi possível cadastrar: $error');
@@ -144,15 +162,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ),
     );
-    name.dispose();
-    username.dispose();
-    password.dispose();
-    recovery.dispose();
     if (saved == true && mounted) _message('Usuário cadastrado.');
   }
 
   void _message(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _chooseLogo() async {
@@ -203,59 +219,70 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) => FutureBuilder<void>(
-        future: _loaded,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          return ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              Text('Dados da igreja', style: Theme.of(context).textTheme.titleLarge),
-              const SizedBox(height: 12),
-              for (final item in _keys)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: TextField(
-                    controller: _controllers[item.$1],
-                    decoration: InputDecoration(labelText: item.$2),
-                  ),
-                ),
-              OutlinedButton.icon(
-                onPressed: _chooseLogo,
-                icon: const Icon(Icons.image_outlined),
-                label: Text(_logoPath == null ? 'Selecionar logo' : 'Logo selecionada'),
+    future: _loaded,
+    builder: (context, snapshot) {
+      if (snapshot.connectionState != ConnectionState.done) {
+        return const Center(child: CircularProgressIndicator());
+      }
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Text(
+            'Dados da igreja',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          const SizedBox(height: 12),
+          for (final item in _keys)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: TextField(
+                controller: _controllers[item.$1],
+                decoration: InputDecoration(labelText: item.$2),
               ),
-              if (_logoPath != null && File(_logoPath!).existsSync())
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  child: Image.file(File(_logoPath!), height: 100, fit: BoxFit.contain),
-                ),
-              const SizedBox(height: 20),
-              SwitchListTile(
-                title: const Text('Tema escuro'),
-                value: context.watch<AppState>().darkMode,
-                onChanged: context.read<AppState>().setDarkMode,
+            ),
+          OutlinedButton.icon(
+            onPressed: _chooseLogo,
+            icon: const Icon(Icons.image_outlined),
+            label: Text(
+              _logoPath == null ? 'Selecionar logo' : 'Logo selecionada',
+            ),
+          ),
+          if (_logoPath != null && File(_logoPath!).existsSync())
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Image.file(
+                File(_logoPath!),
+                height: 100,
+                fit: BoxFit.contain,
               ),
-              const SizedBox(height: 12),
-              if (context.watch<AppState>().user?['perfil'] == 'Administrador')
-                OutlinedButton.icon(
-                  onPressed: _addUser,
-                  icon: const Icon(Icons.person_add_alt_1),
-                  label: const Text('Cadastrar usuário e definir perfil'),
-                ),
-              const SizedBox(height: 8),
-              FilledButton.icon(
-                onPressed: context.watch<AppState>().user?['perfil'] == 'Consulta' ? null : _save,
-                icon: const Icon(Icons.save),
-                label: const Text('Salvar configurações'),
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'Todos os dados são mantidos somente neste dispositivo. Faça backup periódico e guarde o arquivo em local seguro.',
-              ),
-            ],
-          );
-        },
+            ),
+          const SizedBox(height: 20),
+          SwitchListTile(
+            title: const Text('Tema escuro'),
+            value: context.watch<AppState>().darkMode,
+            onChanged: context.read<AppState>().setDarkMode,
+          ),
+          const SizedBox(height: 12),
+          if (context.watch<AppState>().user?['perfil'] == 'Administrador')
+            OutlinedButton.icon(
+              onPressed: _addUser,
+              icon: const Icon(Icons.person_add_alt_1),
+              label: const Text('Cadastrar usuário e definir perfil'),
+            ),
+          const SizedBox(height: 8),
+          FilledButton.icon(
+            onPressed: context.watch<AppState>().user?['perfil'] == 'Consulta'
+                ? null
+                : _save,
+            icon: const Icon(Icons.save),
+            label: const Text('Salvar configurações'),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Todos os dados são mantidos somente neste dispositivo. Faça backup periódico e guarde o arquivo em local seguro.',
+          ),
+        ],
       );
+    },
+  );
 }

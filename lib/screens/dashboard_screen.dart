@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
-import '../database/app_database.dart';
 import '../services/app_state.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -27,70 +26,84 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _data = _load(context.read<AppState>());
   }
 
+  /// Carrega o painel em 3 consultas em vez de 20.
   Future<_DashboardData> _load(AppState state) async {
-    final db = state.database;
-    final income = await db.sum('entradas', 'valor');
-    final expenses = await db.sum(
-      'despesas',
-      'valor',
-      whereColumn: 'status',
-      whereValue: 'Pago',
-    );
-    final stockRows = await db.query('estoque');
-    final totalSales = await db.sum('vendas_cantina', 'valor_total');
-    final purchases = await db.sum('compras_cantina', 'valor_compra');
+    final db = state.database.database;
+
+    // Consulta 1 — totais gerais.
+    final totals = (await db.rawQuery('''
+      SELECT
+        (SELECT COALESCE(SUM(valor),0)        FROM entradas)                        AS entradas,
+        (SELECT COALESCE(SUM(valor),0)        FROM despesas WHERE status = 'Pago')  AS despesas,
+        (SELECT COALESCE(SUM(valor_total),0)  FROM vendas_cantina)                  AS vendas,
+        (SELECT COALESCE(SUM(valor_compra),0) FROM compras_cantina)                 AS compras,
+        (SELECT COUNT(*)                      FROM estoque WHERE quantidade > 0)    AS estoque
+    ''')).first;
+
+    final income = (totals['entradas'] as num).toDouble();
+    final expenses = (totals['despesas'] as num).toDouble();
+    final totalSales = (totals['vendas'] as num).toDouble();
+    final purchases = (totals['compras'] as num).toDouble();
     final canteenProfit = totalSales - purchases;
-    final available = income - expenses + canteenProfit;
+
+    // Consulta 2 — os 6 meses agregados.
+    final monthlyRows = await db.rawQuery('''
+      SELECT mes,
+             SUM(e) AS entradas,
+             SUM(d) AS despesas,
+             SUM(v) AS vendas
+      FROM (
+        SELECT substr(data,1,7) AS mes, valor AS e, 0 AS d, 0 AS v
+          FROM entradas
+        UNION ALL
+        SELECT substr(data,1,7), 0, valor, 0
+          FROM despesas WHERE status = 'Pago'
+        UNION ALL
+        SELECT substr(data,1,7), 0, 0, valor_total
+          FROM vendas_cantina
+      )
+      GROUP BY mes
+    ''');
+
+    final byMonth = <String, Map<String, Object?>>{
+      for (final row in monthlyRows) row['mes'] as String: row,
+    };
+
     final monthlyIncome = <double>[];
     final monthlyExpenses = <double>[];
     final monthlySales = <double>[];
     final now = DateTime.now();
+
     for (var offset = 5; offset >= 0; offset--) {
       final month = DateTime(now.year, now.month - offset);
-      final start = DateFormat('yyyy-MM-01').format(month);
-      final end = DateFormat('yyyy-MM-31').format(month);
-      monthlyIncome.add(await _sumRange(db, 'entradas', 'valor', start, end));
-      monthlyExpenses.add(
-        await _sumRange(db, 'despesas', 'valor', start, end, extra: " AND status = 'Pago'"),
-      );
-      monthlySales.add(await _sumRange(db, 'vendas_cantina', 'valor_total', start, end));
+      final key = '${month.year}-${month.month.toString().padLeft(2, '0')}';
+      final row = byMonth[key];
+      monthlyIncome.add(((row?['entradas'] as num?) ?? 0).toDouble());
+      monthlyExpenses.add(((row?['despesas'] as num?) ?? 0).toDouble());
+      monthlySales.add(((row?['vendas'] as num?) ?? 0).toDouble());
     }
-    final categoryRows = await db.database.rawQuery(
-      "SELECT categoria, SUM(valor) AS total FROM despesas WHERE status = 'Pago' GROUP BY categoria ORDER BY total DESC",
+
+    // Consulta 3 — despesas por categoria.
+    final categoryRows = await db.rawQuery(
+      "SELECT categoria, SUM(valor) AS total FROM despesas "
+      "WHERE status = 'Pago' GROUP BY categoria ORDER BY total DESC",
     );
     final expensesByCategory = <String, double>{
       for (final row in categoryRows)
         row['categoria']?.toString() ?? 'Outros': (row['total'] as num).toDouble(),
     };
+
     return _DashboardData(
       income: income,
       expenses: expenses,
-      balance: available,
+      balance: income - expenses + canteenProfit,
       canteenProfit: canteenProfit,
-      stockCount: stockRows
-          .where((row) => ((row['quantidade'] as num?)?.toDouble() ?? 0) > 0)
-          .length
-          .toDouble(),
+      stockCount: ((totals['estoque'] as num?) ?? 0).toDouble(),
       monthlyIncome: monthlyIncome,
       monthlyExpenses: monthlyExpenses,
       monthlySales: monthlySales,
       expensesByCategory: expensesByCategory,
     );
-  }
-
-  Future<double> _sumRange(
-    AppDatabase db,
-    String table,
-    String column,
-    String start,
-    String end, {
-    String extra = '',
-  }) async {
-    final rows = await db.database.rawQuery(
-      'SELECT COALESCE(SUM($column), 0) AS total FROM $table WHERE data >= ? AND data <= ?$extra',
-      [start, end],
-    );
-    return (rows.first['total'] as num).toDouble();
   }
 
   @override
@@ -101,14 +114,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
             return const Center(child: CircularProgressIndicator());
           }
           if (snapshot.hasError) {
-            return Center(child: Text('Não foi possível carregar o painel: ${snapshot.error}'));
+            return Center(
+              child: Text(
+                'Não foi possível carregar o painel: ${snapshot.error}',
+              ),
+            );
           }
+
           final data = snapshot.data!;
-          final monthLabel = DateFormat('MMMM', 'pt_BR').format(DateTime.now());
-          final yearLabel = DateTime.now().year.toString();
 
           return RefreshIndicator(
-            onRefresh: () async => setState(_refresh),
+            onRefresh: () async {
+              setState(_refresh);
+              await _data;
+            },
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
@@ -116,27 +135,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Painel financeiro',
-                            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Resumo da igreja · $monthLabel $yearLabel',
-                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: Theme.of(context).colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ],
+                      child: Text(
+                        'Painel financeiro',
+                        style: Theme.of(context).textTheme.headlineSmall,
                       ),
                     ),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
                       decoration: BoxDecoration(
                         color: Theme.of(context).colorScheme.primaryContainer,
                         borderRadius: BorderRadius.circular(14),
@@ -144,9 +152,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       child: Text(
                         DateFormat('dd/MM', 'pt_BR').format(DateTime.now()),
                         style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                          color: Theme.of(context).colorScheme.onPrimaryContainer,
-                          fontWeight: FontWeight.w700,
-                        ),
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onPrimaryContainer,
+                              fontWeight: FontWeight.w700,
+                            ),
                       ),
                     ),
                   ],
@@ -158,24 +168,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   children: [
                     _SummaryCard(
                       title: 'Saldo Geral',
-                      value: _currency.format(data.balance),
-                      icon: Icons.account_balance,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                    _SummaryCard(
-                      title: 'Entradas',
-                      value: _currency.format(data.income),
-                      icon: Icons.south_west,
+                      value: _currency.format(data.income - data.expenses),
+                      icon: Icons.account_balance_wallet,
                       color: Colors.green.shade700,
                     ),
                     _SummaryCard(
-                      title: 'Despesas pagas',
-                      value: _currency.format(data.expenses),
-                      icon: Icons.north_east,
-                      color: Colors.red.shade700,
-                    ),
-                    _SummaryCard(
-                      title: 'Lucro cantina',
+                      title: 'Lucro da cantina',
                       value: _currency.format(data.canteenProfit),
                       icon: Icons.storefront,
                       color: Colors.orange.shade800,
@@ -203,7 +201,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Entradas x despesas · 6 meses', style: Theme.of(context).textTheme.titleMedium),
+                        Text(
+                          'Entradas x despesas · 6 meses',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
                         const SizedBox(height: 20),
                         SizedBox(
                           height: 220,
@@ -218,13 +219,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                       toY: data.monthlyIncome[i],
                                       color: Colors.green.shade600,
                                       width: 10,
-                                      borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
+                                      borderRadius: const BorderRadius.vertical(
+                                        top: Radius.circular(6),
+                                      ),
                                     ),
                                     BarChartRodData(
                                       toY: data.monthlyExpenses[i],
                                       color: Colors.red.shade400,
                                       width: 10,
-                                      borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
+                                      borderRadius: const BorderRadius.vertical(
+                                        top: Radius.circular(6),
+                                      ),
                                     ),
                                   ],
                                 ),
@@ -233,7 +238,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               borderData: FlBorderData(show: false),
                               gridData: const FlGridData(show: true),
                               alignment: BarChartAlignment.spaceAround,
-                              maxY: _maxValue(data.monthlyIncome, data.monthlyExpenses) * 1.25,
+                              maxY: _maxValue(
+                                    data.monthlyIncome,
+                                    data.monthlyExpenses,
+                                  ) *
+                                  1.25,
                             ),
                           ),
                         ),
@@ -252,7 +261,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Evolução financeira', style: Theme.of(context).textTheme.titleMedium),
+                        Text(
+                          'Evolução financeira',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
                         const SizedBox(height: 16),
                         SizedBox(
                           height: 180,
@@ -264,49 +276,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     6,
                                     (i) => FlSpot(
                                       i.toDouble(),
-                                      data.monthlyIncome[i] - data.monthlyExpenses[i],
+                                      data.monthlyIncome[i] -
+                                          data.monthlyExpenses[i],
                                     ),
                                   ),
-                                  color: Theme.of(context).colorScheme.primary,
+                                  color: Colors.teal.shade600,
                                   isCurved: true,
                                   dotData: const FlDotData(show: true),
                                   belowBarData: BarAreaData(
                                     show: true,
-                                    color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.10),
+                                    color: Colors.teal.withValues(alpha: 0.12),
                                   ),
                                 ),
-                              ],
-                              titlesData: const FlTitlesData(show: false),
-                              borderData: FlBorderData(show: false),
-                              gridData: const FlGridData(show: true),
-                              minY: 0,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Card(
-                  elevation: 0,
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Vendas da cantina · 6 meses', style: Theme.of(context).textTheme.titleMedium),
-                        const SizedBox(height: 16),
-                        SizedBox(
-                          height: 180,
-                          child: LineChart(
-                            LineChartData(
-                              lineBarsData: [
                                 LineChartBarData(
                                   spots: List.generate(
                                     6,
-                                    (i) => FlSpot(i.toDouble(), data.monthlySales[i]),
+                                    (i) => FlSpot(
+                                      i.toDouble(),
+                                      data.monthlySales[i],
+                                    ),
                                   ),
                                   color: Colors.orange,
                                   isCurved: true,
@@ -324,6 +312,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             ),
                           ),
                         ),
+                        const SizedBox(height: 8),
+                        const Text('Verde: saldo mensal · Laranja: vendas da cantina'),
                       ],
                     ),
                   ),
@@ -338,7 +328,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('Despesas por categoria', style: Theme.of(context).textTheme.titleMedium),
+                          Text(
+                            'Despesas por categoria',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
                           const SizedBox(height: 16),
                           SizedBox(
                             height: 220,
@@ -352,7 +345,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                         value: entry.value,
                                         title: entry.key,
                                         radius: 72,
-                                        titleStyle: const TextStyle(fontSize: 10, color: Colors.white),
+                                        titleStyle: const TextStyle(
+                                          fontSize: 10,
+                                          color: Colors.white,
+                                        ),
                                         color: _categoryColor(entry.key),
                                       ),
                                     )
@@ -373,7 +369,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   double _maxValue(List<double> income, List<double> expenses) {
     final allValues = [...income, ...expenses];
     if (allValues.isEmpty) return 1;
-    return allValues.reduce((a, b) => a > b ? a : b);
+    final max = allValues.reduce((a, b) => a > b ? a : b);
+    return max == 0 ? 1 : max;
   }
 
   Color _categoryColor(String category) {
@@ -454,24 +451,24 @@ class _SummaryCard extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.16),
+                    color: color.withValues(alpha: 0.18),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Icon(icon, color: color),
+                  child: Icon(icon, color: color, size: 22),
                 ),
                 const SizedBox(height: 12),
                 Text(
                   title,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 4),
                 Text(
                   value,
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+                        fontWeight: FontWeight.w700,
+                      ),
                 ),
               ],
             ),

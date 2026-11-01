@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="feature-google_mlkit_text_recognition">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/build/google_mlkit_text_recognition/intermediates/merged_java_res/release/mergeReleaseJavaResource/feature-google_mlkit_text_recognition.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

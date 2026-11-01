@@ -3,8 +3,12 @@ import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+import 'package:local_auth/local_auth.dart';
+import 'package:sqflite_sqlcipher/sqflite.dart';
 
 import '../database/app_database.dart';
+import 'audit_service.dart';
 
 const _passwordHashIterations = 120000;
 const _passwordHashPrefix = 'pbkdf2-sha256-120000:';
@@ -27,12 +31,84 @@ String _derivePasswordHash(Map<String, String> parameters) {
 
 class AppState extends ChangeNotifier {
   AppState(this.database) {
+    auditService = AuditService(database);
     _loadTheme();
   }
 
   final AppDatabase database;
+  late final AuditService auditService;
+  final LocalAuthentication _localAuth = LocalAuthentication();
+
   Map<String, Object?>? user;
   bool darkMode = false;
+
+  int _failedLoginAttempts = 0;
+  DateTime? _lockoutUntil;
+
+  bool get isLockedOut =>
+      _lockoutUntil != null && DateTime.now().isBefore(_lockoutUntil!);
+
+  void _registerFailedLoginAttempt() {
+    _failedLoginAttempts++;
+    if (_failedLoginAttempts >= 5) {
+      _lockoutUntil = DateTime.now().add(const Duration(seconds: 30));
+    }
+  }
+
+  Future<bool> authenticateBiometric({
+    required String reason,
+    required String operation,
+    String? details,
+  }) async {
+    try {
+      final canCheck = await _localAuth.canCheckBiometrics;
+      final isSupported = await _localAuth.isDeviceSupported();
+      if (!canCheck && !isSupported) {
+        await auditService.logAction(
+          user: user,
+          authType: 'Sessão de Usuário (Sem Biometria no Aparelho)',
+          operation: operation,
+          details: details,
+        );
+        return true;
+      }
+
+      final authenticated = await _localAuth.authenticate(
+        localizedReason: reason,
+        options: const AuthenticationOptions(
+          stickyAuth: true,
+          biometricOnly: false,
+          useErrorDialogs: true,
+        ),
+      );
+
+      if (authenticated) {
+        await auditService.logAction(
+          user: user,
+          authType: 'Biometria (Digital/Facial/Windows Hello)',
+          operation: operation,
+          details: details,
+        );
+        return true;
+      } else {
+        await auditService.logAction(
+          user: user,
+          authType: 'Cancelamento / Falha Biométrica',
+          operation: 'Acesso Negado: $operation',
+          details: details,
+        );
+        return false;
+      }
+    } catch (e) {
+      await auditService.logAction(
+        user: user,
+        authType: 'Erro Biometria',
+        operation: 'Erro: $operation',
+        details: e.toString(),
+      );
+      return false;
+    }
+  }
 
   String _newSalt() {
     final random = Random.secure();
@@ -87,20 +163,49 @@ class AppState extends ChangeNotifier {
       'perfil': role,
       'criado_em': DateTime.now().toIso8601String(),
     });
+    await auditService.logAction(
+      user: user,
+      authType: 'Sistema',
+      operation: 'Novo Usuário Cadastrado',
+      details: 'Usuário: ${username.trim().toLowerCase()}, Perfil: $role',
+    );
   }
 
   Future<bool> login(String username, String password) async {
+    if (isLockedOut) {
+      final secondsLeft = _lockoutUntil!.difference(DateTime.now()).inSeconds;
+      throw StateError(
+        'Muitas tentativas incorretas. Tente novamente em $secondsLeft segundo(s).',
+      );
+    }
+
     final rows = await database.query(
       'usuarios',
       where: 'usuario = ?',
       whereArgs: [username.trim().toLowerCase()],
       limit: 1,
     );
-    if (rows.isEmpty) return false;
+    if (rows.isEmpty) {
+      _registerFailedLoginAttempt();
+      await auditService.logAction(
+        user: null,
+        authType: 'Senha Incorreta',
+        operation: 'Falha de Login (Usuário não encontrado: $username)',
+      );
+      return false;
+    }
     final account = rows.first;
     final storedHash = account['senha_hash'] as String;
     final salt = account['senha_salt'] as String;
-    if (!await _verifyHash(password, salt, storedHash)) return false;
+    if (!await _verifyHash(password, salt, storedHash)) {
+      _registerFailedLoginAttempt();
+      await auditService.logAction(
+        user: account,
+        authType: 'Senha Incorreta',
+        operation: 'Falha de Login (Senha errada)',
+      );
+      return false;
+    }
     if (!storedHash.startsWith(_passwordHashPrefix)) {
       final upgradedSalt = _newSalt();
       final upgradedHash = await _hash(password, upgradedSalt);
@@ -111,7 +216,39 @@ class AppState extends ChangeNotifier {
       account['senha_hash'] = upgradedHash;
       account['senha_salt'] = upgradedSalt;
     }
+
+    _failedLoginAttempts = 0;
+    _lockoutUntil = null;
     user = account;
+
+    await auditService.logAction(
+      user: user,
+      authType: 'Senha',
+      operation: 'Login Realizado',
+    );
+    notifyListeners();
+    return true;
+  }
+
+  Future<bool> loginWithBiometrics(String? preferredUsername) async {
+    final username = preferredUsername?.trim().toLowerCase() ?? '';
+    final rows = username.isNotEmpty
+        ? await database.query(
+            'usuarios',
+            where: 'usuario = ?',
+            whereArgs: [username],
+            limit: 1,
+          )
+        : await database.query('usuarios', limit: 1);
+
+    if (rows.isEmpty) return false;
+    user = rows.first;
+
+    await auditService.logAction(
+      user: user,
+      authType: 'Biometria (Digital/Facial/Windows Hello)',
+      operation: 'Login Realizado por Biometria',
+    );
     notifyListeners();
     return true;
   }
@@ -154,9 +291,20 @@ class AppState extends ChangeNotifier {
     await database.update('usuarios', {
       ...updates,
     }, account['id'] as int);
+
+    await auditService.logAction(
+      user: account,
+      authType: 'Chave de Recuperação',
+      operation: 'Senha Redefinida',
+    );
   }
 
   Future<void> logout() async {
+    await auditService.logAction(
+      user: user,
+      authType: 'Sessão',
+      operation: 'Logout Realizado',
+    );
     user = null;
     notifyListeners();
   }
@@ -169,16 +317,17 @@ class AppState extends ChangeNotifier {
       limit: 1,
     );
     darkMode = rows.isNotEmpty && rows.first['valor'] == '1';
-    notifyListeners();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (hasListeners) notifyListeners();
+    });
   }
 
   Future<void> setDarkMode(bool value) async {
     darkMode = value;
-    await database.database.update(
+    await database.database.insert(
       'configuracoes',
-      {'valor': value ? '1' : '0'},
-      where: 'chave = ?',
-      whereArgs: ['tema_escuro'],
+      {'chave': 'tema_escuro', 'valor': value ? '1' : '0'},
+      conflictAlgorithm: ConflictAlgorithm.replace,
     );
     notifyListeners();
   }

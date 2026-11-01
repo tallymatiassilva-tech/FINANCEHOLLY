@@ -30,6 +30,27 @@ class AppDatabase {
     return db;
   }
 
+  /// Índices de leitura. Aplicados na criação e na migração para a versão 4.
+  static Future<void> _createIndexes(Database db) async {
+    const statements = [
+      'CREATE INDEX IF NOT EXISTS idx_entradas_data ON entradas(data)',
+      'CREATE INDEX IF NOT EXISTS idx_despesas_data ON despesas(data)',
+      'CREATE INDEX IF NOT EXISTS idx_despesas_status ON despesas(status)',
+      'CREATE INDEX IF NOT EXISTS idx_despesas_vencimento ON despesas(vencimento)',
+      'CREATE INDEX IF NOT EXISTS idx_vendas_data ON vendas_cantina(data)',
+      'CREATE INDEX IF NOT EXISTS idx_vendas_produto ON vendas_cantina(produto_id)',
+      'CREATE INDEX IF NOT EXISTS idx_compras_data ON compras_cantina(data)',
+      'CREATE INDEX IF NOT EXISTS idx_mov_data ON movimentacao_estoque(data)',
+      'CREATE INDEX IF NOT EXISTS idx_mov_produto ON movimentacao_estoque(produto_id)',
+      'CREATE INDEX IF NOT EXISTS idx_estoque_produto ON estoque(produto)',
+      'CREATE INDEX IF NOT EXISTS idx_auditoria_data ON auditoria_logs(data_hora)',
+      'CREATE INDEX IF NOT EXISTS idx_fluxocaixa_data ON fluxocaixa(data)',
+    ];
+    for (final sql in statements) {
+      await db.execute(sql);
+    }
+  }
+
   Future<void> open() async {
     if (_database != null) return;
     final databasePath = await getDatabasesPath();
@@ -54,8 +75,31 @@ class AppDatabase {
     _database = await openDatabase(
       filePath,
       password: key,
-      version: 1,
+      version: 4,
       onConfigure: (db) async => db.execute('PRAGMA foreign_keys = ON'),
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute('ALTER TABLE despesas ADD COLUMN vencimento TEXT');
+        }
+        if (oldVersion < 3) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS auditoria_logs (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              usuario_id INTEGER,
+              usuario_nome TEXT,
+              tipo_autenticacao TEXT NOT NULL,
+              data_hora TEXT NOT NULL,
+              operacao TEXT NOT NULL,
+              detalhes TEXT,
+              dispositivo TEXT,
+              ip_endereco TEXT
+            )
+          ''');
+        }
+        if (oldVersion < 4) {
+          await _createIndexes(db);
+        }
+      },
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE usuarios (
@@ -103,6 +147,7 @@ class AppDatabase {
           CREATE TABLE despesas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             data TEXT NOT NULL,
+            vencimento TEXT,
             categoria TEXT NOT NULL,
             categoria_id INTEGER REFERENCES categorias(id) ON DELETE SET NULL,
             descricao TEXT NOT NULL,
@@ -174,6 +219,21 @@ class AppDatabase {
             valor TEXT NOT NULL
           )
         ''');
+        await db.execute('''
+          CREATE TABLE auditoria_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario_id INTEGER,
+            usuario_nome TEXT,
+            tipo_autenticacao TEXT NOT NULL,
+            data_hora TEXT NOT NULL,
+            operacao TEXT NOT NULL,
+            detalhes TEXT,
+            dispositivo TEXT,
+            ip_endereco TEXT
+          )
+        ''');
+
+        await _createIndexes(db);
 
         await db.insert('configuracoes', {'chave': 'tema_escuro', 'valor': '0'});
         for (final name in [
@@ -276,7 +336,9 @@ class AppDatabase {
         "SELECT name FROM sqlite_master WHERE type = 'table'",
       );
       if (!tables.any((row) => row['name'] == 'usuarios')) {
-        throw StateError('A cópia criptografada do banco não passou na validação.');
+        throw StateError(
+          'A cópia criptografada do banco não passou na validação.',
+        );
       }
     } finally {
       await verification.close();
@@ -297,7 +359,9 @@ class AppDatabase {
     final isPlaintext = await _isPlaintextDatabase(filePath);
     final key = _encryptionKey;
     if (!isPlaintext && key == null) {
-      throw StateError('A chave do banco não está disponível para validar o backup.');
+      throw StateError(
+        'A chave do banco não está disponível para validar o backup.',
+      );
     }
     return openDatabase(
       filePath,
@@ -370,11 +434,7 @@ class AppDatabase {
         await source.execute('DETACH DATABASE backup');
         attached = false;
       } finally {
-        try {
-          if (attached) await source.execute('DETACH DATABASE backup');
-        } finally {
-          await source.close();
-        }
+        if (attached) await source.execute('DETACH DATABASE backup');
       }
 
       final verification = await openDatabase(outputPath, readOnly: true);

@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="feature-printing">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/build/printing/intermediates/merged_java_res/release/mergeReleaseJavaResource/feature-printing.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>
