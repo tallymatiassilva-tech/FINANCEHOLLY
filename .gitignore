@@ -40,3 +40,11 @@ build/
 *.apk
 *.jks
 key.properties
+
+.dart_tool/
+build/
+.idea/
+*.apk
+*.jks
+*.keystore
+key.properties
