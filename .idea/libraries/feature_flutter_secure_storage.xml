@@ -1,9 +1,0 @@
-<component name="libraryTable">
-  <library name="feature-flutter_secure_storage">
-    <CLASSES>
-      <root url="jar://$PROJECT_DIR$/build/flutter_secure_storage/intermediates/merged_java_res/debug/mergeDebugJavaResource/feature-flutter_secure_storage.jar!/" />
-    </CLASSES>
-    <JAVADOC />
-    <SOURCES />
-  </library>
-</component>

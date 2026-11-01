@@ -1,9 +1,0 @@
-<component name="libraryTable">
-  <library name="model.tflite">
-    <CLASSES>
-      <root url="jar://$PROJECT_DIR$/build/app/intermediates/compressed_assets/release/compressReleaseAssets/out/assets/mlkit-google-ocr-models/gocr/layout/line_splitting_custom_ops/model.tflite.jar!/" />
-    </CLASSES>
-    <JAVADOC />
-    <SOURCES />
-  </library>
-</component>

@@ -1,9 +1,0 @@
-<component name="libraryTable">
-  <library name="R7">
-    <CLASSES>
-      <root url="jar://$PROJECT_DIR$/build/sqflite_android/intermediates/compile_r_class_jar/release/generateReleaseRFile/R.jar!/" />
-    </CLASSES>
-    <JAVADOC />
-    <SOURCES />
-  </library>
-</component>

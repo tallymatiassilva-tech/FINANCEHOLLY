@@ -1,9 +1,0 @@
-<component name="libraryTable">
-  <library name="androidx.lifecycle.lint.LiveDataCoreIssueRegistry-32b654e6cacc2c23.2">
-    <CLASSES>
-      <root url="jar://$PROJECT_DIR$/build/app/intermediates/lint-cache/lintVitalAnalyzeRelease/migrated-jars/androidx.lifecycle.lint.LiveDataCoreIssueRegistry-32b654e6cacc2c23..jar!/" />
-    </CLASSES>
-    <JAVADOC />
-    <SOURCES />
-  </library>
-</component>

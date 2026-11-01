@@ -1,9 +1,0 @@
-<component name="libraryTable">
-  <library name="classes16">
-    <CLASSES>
-      <root url="jar://$PROJECT_DIR$/build/flutter_plugin_android_lifecycle/intermediates/aar_main_jar/release/syncReleaseLibJars/classes.jar!/" />
-    </CLASSES>
-    <JAVADOC />
-    <SOURCES />
-  </library>
-</component>
