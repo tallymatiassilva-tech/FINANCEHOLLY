@@ -33,3 +33,10 @@ ios/Runner/GeneratedPluginRegistrant.*
 
 .idea/
 android/.kotlin/
+
+.dart_tool/
+build/
+.idea/
+*.apk
+*.jks
+key.properties
