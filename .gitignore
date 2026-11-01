@@ -30,3 +30,6 @@ ios/Runner/GeneratedPluginRegistrant.*
 *.apk
 *.aab
 *.ipa
+
+.idea/
+android/.kotlin/
